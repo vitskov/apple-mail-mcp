@@ -672,6 +672,306 @@ def save_attachments(
         }
 
 
+@mcp.tool()
+def move_messages(
+    message_ids: list[str],
+    destination_mailbox: str,
+    account: str,
+    gmail_mode: bool = False,
+) -> dict[str, Any]:
+    """
+    Move messages to a different mailbox/folder.
+
+    Args:
+        message_ids: List of message IDs to move
+        destination_mailbox: Name of destination mailbox (use "/" for nested: "Projects/Client Work")
+        account: Account name containing the messages
+        gmail_mode: Use Gmail-specific move handling (copy + delete) for label-based systems
+
+    Returns:
+        Dictionary with success status and number of messages moved
+
+    Example:
+        move_messages(
+            message_ids=["12345", "12346"],
+            destination_mailbox="Archive",
+            account="Gmail"
+        )
+    """
+    try:
+        if not message_ids:
+            return {
+                "success": True,
+                "count": 0,
+                "message": "No messages to move",
+            }
+
+        logger.info(
+            f"Moving {len(message_ids)} message(s) to {destination_mailbox} in account {account}"
+        )
+
+        # Move the messages
+        count = mail.move_messages(
+            message_ids=message_ids,
+            destination_mailbox=destination_mailbox,
+            account=account,
+            gmail_mode=gmail_mode,
+        )
+
+        return {
+            "success": True,
+            "count": count,
+            "destination": destination_mailbox,
+            "account": account,
+        }
+
+    except MailMailboxNotFoundError as e:
+        logger.error(f"Mailbox not found: {e}")
+        return {
+            "success": False,
+            "error": f"Mailbox '{destination_mailbox}' not found in account '{account}'",
+            "error_type": "mailbox_not_found",
+        }
+    except MailAccountNotFoundError as e:
+        logger.error(f"Account not found: {e}")
+        return {
+            "success": False,
+            "error": f"Account '{account}' not found",
+            "error_type": "account_not_found",
+        }
+    except Exception as e:
+        logger.error(f"Error moving messages: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "unknown",
+        }
+
+
+@mcp.tool()
+def flag_message(
+    message_ids: list[str],
+    flag_color: str,
+) -> dict[str, Any]:
+    """
+    Set flag color on messages.
+
+    Args:
+        message_ids: List of message IDs to flag
+        flag_color: Flag color name (none, orange, red, yellow, blue, green, purple, gray)
+
+    Returns:
+        Dictionary with success status and number of messages flagged
+
+    Example:
+        flag_message(
+            message_ids=["12345"],
+            flag_color="red"
+        )
+    """
+    try:
+        if not message_ids:
+            return {
+                "success": True,
+                "count": 0,
+                "message": "No messages to flag",
+            }
+
+        logger.info(f"Flagging {len(message_ids)} message(s) with color {flag_color}")
+
+        # Flag the messages
+        count = mail.flag_message(
+            message_ids=message_ids,
+            flag_color=flag_color,
+        )
+
+        return {
+            "success": True,
+            "count": count,
+            "flag_color": flag_color,
+        }
+
+    except ValueError as e:
+        logger.error(f"Invalid flag color: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "validation_error",
+        }
+    except MailMessageNotFoundError as e:
+        logger.error(f"Message not found: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "message_not_found",
+        }
+    except Exception as e:
+        logger.error(f"Error flagging messages: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "unknown",
+        }
+
+
+@mcp.tool()
+def create_mailbox(
+    account: str,
+    name: str,
+    parent_mailbox: str | None = None,
+) -> dict[str, Any]:
+    """
+    Create a new mailbox/folder.
+
+    Args:
+        account: Account name to create mailbox in
+        name: Name of the new mailbox
+        parent_mailbox: Optional parent mailbox for nesting (None = top-level)
+
+    Returns:
+        Dictionary with success status and mailbox details
+
+    Example:
+        create_mailbox(
+            account="Gmail",
+            name="Client Work",
+            parent_mailbox="Projects"
+        )
+    """
+    try:
+        if not name or not name.strip():
+            return {
+                "success": False,
+                "error": "Mailbox name cannot be empty",
+                "error_type": "validation_error",
+            }
+
+        logger.info(f"Creating mailbox '{name}' in account {account}")
+
+        # Create the mailbox
+        success = mail.create_mailbox(
+            account=account,
+            name=name,
+            parent_mailbox=parent_mailbox,
+        )
+
+        return {
+            "success": success,
+            "account": account,
+            "mailbox": name,
+            "parent": parent_mailbox,
+        }
+
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "validation_error",
+        }
+    except MailAccountNotFoundError as e:
+        logger.error(f"Account not found: {e}")
+        return {
+            "success": False,
+            "error": f"Account '{account}' not found",
+            "error_type": "account_not_found",
+        }
+    except MailAppleScriptError as e:
+        logger.error(f"AppleScript error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "applescript_error",
+        }
+    except Exception as e:
+        logger.error(f"Error creating mailbox: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "unknown",
+        }
+
+
+@mcp.tool()
+def delete_messages(
+    message_ids: list[str],
+    permanent: bool = False,
+) -> dict[str, Any]:
+    """
+    Delete messages (move to trash or permanently delete).
+
+    Args:
+        message_ids: List of message IDs to delete
+        permanent: If True, permanently delete; if False, move to Trash (default: False)
+
+    Returns:
+        Dictionary with success status and number of messages deleted
+
+    Example:
+        delete_messages(
+            message_ids=["12345"],
+            permanent=False  # Move to trash
+        )
+
+    Note:
+        Bulk deletions are limited to 100 messages for safety.
+        Permanent deletion cannot be undone - use with caution.
+    """
+    try:
+        if not message_ids:
+            return {
+                "success": True,
+                "count": 0,
+                "message": "No messages to delete",
+            }
+
+        # Validate bulk operation limit
+        if len(message_ids) > 100:
+            return {
+                "success": False,
+                "error": f"Cannot delete {len(message_ids)} messages at once (max: 100)",
+                "error_type": "validation_error",
+            }
+
+        delete_type = "permanently" if permanent else "to trash"
+        logger.info(f"Deleting {len(message_ids)} message(s) {delete_type}")
+
+        # Delete the messages
+        count = mail.delete_messages(
+            message_ids=message_ids,
+            permanent=permanent,
+            skip_bulk_check=False,  # Enforce limit
+        )
+
+        return {
+            "success": True,
+            "count": count,
+            "permanent": permanent,
+        }
+
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "validation_error",
+        }
+    except MailMessageNotFoundError as e:
+        logger.error(f"Message not found: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "message_not_found",
+        }
+    except Exception as e:
+        logger.error(f"Error deleting messages: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "unknown",
+        }
+
+
 def main() -> None:
     """Run the MCP server."""
     logger.info("Starting Apple Mail MCP server")

@@ -674,3 +674,277 @@ class AppleMailConnector:
 
         result = self._run_applescript(script)
         return int(result) if result.isdigit() else 0
+
+    def move_messages(
+        self,
+        message_ids: list[str],
+        destination_mailbox: str,
+        account: str,
+        gmail_mode: bool = False,
+    ) -> int:
+        """
+        Move messages to a different mailbox.
+
+        Args:
+            message_ids: List of message IDs to move
+            destination_mailbox: Name of destination mailbox
+            account: Account name
+            gmail_mode: Use Gmail-specific handling (copy + delete)
+
+        Returns:
+            Number of messages moved
+
+        Raises:
+            MailAccountNotFoundError: If account doesn't exist
+            MailMailboxNotFoundError: If destination mailbox doesn't exist
+        """
+        if not message_ids:
+            return 0
+
+        from .utils import sanitize_input
+
+        account_safe = escape_applescript_string(sanitize_input(account))
+        mailbox_safe = escape_applescript_string(sanitize_input(destination_mailbox))
+        id_list = ", ".join(message_ids)
+
+        if gmail_mode:
+            # Gmail requires copy + delete approach to properly handle labels
+            script = f"""
+            tell application "Mail"
+                set accountRef to account "{account_safe}"
+                set destMailbox to mailbox "{mailbox_safe}" of accountRef
+                set idList to {{{id_list}}}
+                set moveCount to 0
+
+                repeat with msgId in idList
+                    repeat with acc in accounts
+                        repeat with mb in mailboxes of acc
+                            try
+                                set msg to first message of mb whose id is msgId
+                                duplicate msg to destMailbox
+                                delete msg
+                                set moveCount to moveCount + 1
+                            end try
+                        end repeat
+                    end repeat
+                end repeat
+
+                return moveCount
+            end tell
+            """
+        else:
+            # Standard IMAP move
+            script = f"""
+            tell application "Mail"
+                set accountRef to account "{account_safe}"
+                set destMailbox to mailbox "{mailbox_safe}" of accountRef
+                set idList to {{{id_list}}}
+                set moveCount to 0
+
+                repeat with msgId in idList
+                    repeat with acc in accounts
+                        repeat with mb in mailboxes of acc
+                            try
+                                set msg to first message of mb whose id is msgId
+                                set mailbox of msg to destMailbox
+                                set moveCount to moveCount + 1
+                            end try
+                        end repeat
+                    end repeat
+                end repeat
+
+                return moveCount
+            end tell
+            """
+
+        result = self._run_applescript(script)
+        return int(result) if result.isdigit() else 0
+
+    def flag_message(
+        self,
+        message_ids: list[str],
+        flag_color: str,
+    ) -> int:
+        """
+        Set flag color on messages.
+
+        Args:
+            message_ids: List of message IDs to flag
+            flag_color: Flag color (none, orange, red, yellow, blue, green, purple, gray)
+
+        Returns:
+            Number of messages flagged
+
+        Raises:
+            ValueError: If flag color is invalid
+        """
+        if not message_ids:
+            return 0
+
+        from .utils import get_flag_index, validate_flag_color
+
+        if not validate_flag_color(flag_color):
+            raise ValueError(f"Invalid flag color: {flag_color}")
+
+        flag_index = get_flag_index(flag_color)
+        flagged_status = "true" if flag_color != "none" else "false"
+        id_list = ", ".join(message_ids)
+
+        script = f"""
+        tell application "Mail"
+            set idList to {{{id_list}}}
+            set flagCount to 0
+
+            repeat with msgId in idList
+                repeat with acc in accounts
+                    repeat with mb in mailboxes of acc
+                        try
+                            set msg to first message of mb whose id is msgId
+                            set flag index of msg to {flag_index}
+                            set flagged status of msg to {flagged_status}
+                            set flagCount to flagCount + 1
+                        end try
+                    end repeat
+                end repeat
+            end repeat
+
+            return flagCount
+        end tell
+        """
+
+        result = self._run_applescript(script)
+        return int(result) if result.isdigit() else 0
+
+    def create_mailbox(
+        self,
+        account: str,
+        name: str,
+        parent_mailbox: str | None = None,
+    ) -> bool:
+        """
+        Create a new mailbox/folder.
+
+        Args:
+            account: Account name
+            name: Name for new mailbox
+            parent_mailbox: Parent mailbox for nested creation (optional)
+
+        Returns:
+            True if created successfully
+
+        Raises:
+            ValueError: If name is invalid
+            MailAccountNotFoundError: If account doesn't exist
+            MailAppleScriptError: If mailbox already exists
+        """
+        from .utils import sanitize_mailbox_name
+
+        # Validate and sanitize name
+        sanitized_name = sanitize_mailbox_name(name)
+        if not sanitized_name:
+            raise ValueError(f"Invalid mailbox name: {name}")
+
+        account_safe = escape_applescript_string(sanitize_input(account))
+        name_safe = escape_applescript_string(sanitized_name)
+
+        if parent_mailbox:
+            parent_safe = escape_applescript_string(sanitize_input(parent_mailbox))
+            script = f"""
+            tell application "Mail"
+                set accountRef to account "{account_safe}"
+                set parentMailbox to mailbox "{parent_safe}" of accountRef
+                make new mailbox at parentMailbox with properties {{name:"{name_safe}"}}
+                return "success"
+            end tell
+            """
+        else:
+            script = f"""
+            tell application "Mail"
+                set accountRef to account "{account_safe}"
+                make new mailbox at accountRef with properties {{name:"{name_safe}"}}
+                return "success"
+            end tell
+            """
+
+        result = self._run_applescript(script)
+        return result == "success"
+
+    def delete_messages(
+        self,
+        message_ids: list[str],
+        permanent: bool = False,
+        skip_bulk_check: bool = True,
+    ) -> int:
+        """
+        Delete messages (move to trash or permanent delete).
+
+        Args:
+            message_ids: List of message IDs to delete
+            permanent: If True, permanently delete (bypass trash)
+            skip_bulk_check: If False, enforce bulk operation limits
+
+        Returns:
+            Number of messages deleted
+
+        Raises:
+            ValueError: If bulk check fails
+        """
+        if not message_ids:
+            return 0
+
+        # Safety check for bulk operations
+        if not skip_bulk_check and len(message_ids) > 100:
+            raise ValueError(
+                f"Too many messages for bulk delete ({len(message_ids)}). "
+                "Maximum is 100 without skip_bulk_check=True"
+            )
+
+        id_list = ", ".join(message_ids)
+
+        if permanent:
+            # Permanent delete (not recommended, requires extra caution)
+            script = f"""
+            tell application "Mail"
+                set idList to {{{id_list}}}
+                set deleteCount to 0
+
+                repeat with msgId in idList
+                    repeat with acc in accounts
+                        repeat with mb in mailboxes of acc
+                            try
+                                set msg to first message of mb whose id is msgId
+                                delete msg
+                                set deleteCount to deleteCount + 1
+                            end try
+                        end repeat
+                    end repeat
+                end repeat
+
+                return deleteCount
+            end tell
+            """
+        else:
+            # Move to trash (standard delete)
+            script = f"""
+            tell application "Mail"
+                set idList to {{{id_list}}}
+                set deleteCount to 0
+
+                repeat with msgId in idList
+                    repeat with acc in accounts
+                        repeat with mb in mailboxes of acc
+                            try
+                                set msg to first message of mb whose id is msgId
+                                delete msg
+                                set deleteCount to deleteCount + 1
+                            end try
+                        end repeat
+                    end repeat
+                end repeat
+
+                return deleteCount
+            end tell
+            """
+
+        result = self._run_applescript(script)
+        return int(result) if result.isdigit() else 0

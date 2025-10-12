@@ -195,3 +195,98 @@ def sanitize_filename(filename: str) -> str:
         filename = "unnamed_file"
 
     return filename
+
+
+def sanitize_mailbox_name(name: str) -> str:
+    """
+    Sanitize mailbox/folder name for safe operations.
+
+    Args:
+        name: Mailbox name to sanitize
+
+    Returns:
+        Sanitized mailbox name
+
+    Example:
+        >>> sanitize_mailbox_name("Valid Name")
+        'Valid Name'
+        >>> sanitize_mailbox_name("../../../etc")
+        ''
+    """
+    import re
+
+    # Remove null bytes
+    name = name.replace("\x00", "")
+
+    # Remove path traversal attempts
+    name = name.replace("..", "")
+    name = name.replace("/", "")
+    name = name.replace("\\", "")
+
+    # Remove dangerous characters but keep spaces, dashes, underscores
+    name = re.sub(r'[<>:"|?*]', '', name)
+
+    # Trim whitespace
+    name = name.strip()
+
+    return name
+
+
+def validate_flag_color(color: str) -> bool:
+    """
+    Validate flag color name.
+
+    Args:
+        color: Flag color name
+
+    Returns:
+        True if valid color, False otherwise
+
+    Example:
+        >>> validate_flag_color("red")
+        True
+        >>> validate_flag_color("invalid")
+        False
+    """
+    valid_colors = {"none", "orange", "red", "yellow", "blue", "green", "purple", "gray"}
+    return color.lower() in valid_colors
+
+
+def get_flag_index(color: str) -> int:
+    """
+    Get AppleScript flag index for a color name.
+
+    Args:
+        color: Flag color name
+
+    Returns:
+        Flag index for AppleScript (-1 to 6)
+
+    Raises:
+        ValueError: If color is invalid
+
+    Example:
+        >>> get_flag_index("red")
+        1
+        >>> get_flag_index("none")
+        -1
+    """
+    color_map = {
+        "none": -1,
+        "orange": 0,
+        "red": 1,
+        "yellow": 2,
+        "blue": 3,
+        "green": 4,
+        "purple": 5,
+        "gray": 6,
+    }
+
+    color_lower = color.lower()
+    if color_lower not in color_map:
+        raise ValueError(
+            f"Invalid flag color: {color}. "
+            f"Valid colors: {', '.join(color_map.keys())}"
+        )
+
+    return color_map[color_lower]
