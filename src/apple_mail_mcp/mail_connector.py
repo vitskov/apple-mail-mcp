@@ -30,6 +30,7 @@ class AppleMailConnector:
             timeout: Timeout in seconds for AppleScript operations
         """
         self.timeout = timeout
+        self._whose_unsupported_accounts: set[str] = set()
 
     def _run_applescript(self, script: str) -> str:
         """
@@ -161,6 +162,102 @@ class AppleMailConnector:
         # For now return raw
         return [{"raw": result}]
 
+    def _search_messages_direct(
+        self, account: str, mailbox: str, scan_limit: int = 200
+    ) -> str:
+        """
+        Fetch messages by index (no whose clause). Works on Exchange accounts.
+
+        Args:
+            account: Sanitized account name
+            mailbox: Sanitized mailbox name
+            scan_limit: Max messages to fetch
+
+        Returns:
+            Raw pipe-delimited output string
+        """
+        account_safe = escape_applescript_string(sanitize_input(account))
+        mailbox_safe = escape_applescript_string(sanitize_input(mailbox))
+
+        script = f"""
+        tell application "Mail"
+            set accountRef to account "{account_safe}"
+            set mailboxRef to mailbox "{mailbox_safe}" of accountRef
+            set msgCount to count of messages of mailboxRef
+            set fetchCount to msgCount
+            if fetchCount > {scan_limit} then set fetchCount to {scan_limit}
+            if fetchCount < 1 then return ""
+            set recentMsgs to messages 1 thru fetchCount of mailboxRef
+            set resultList to {{}}
+            repeat with msg in recentMsgs
+                set msgId to id of msg as text
+                set msgSubject to subject of msg
+                set msgSender to sender of msg
+                set msgDate to date received of msg as text
+                set msgRead to read status of msg
+                set msgData to msgId & "|" & msgSubject & "|" & msgSender & "|" & msgDate & "|" & msgRead
+                set end of resultList to msgData
+            end repeat
+            set AppleScript's text item delimiters to linefeed
+            set output to resultList as text
+            set AppleScript's text item delimiters to ""
+            return output
+        end tell
+        """
+
+        return self._run_applescript(script)
+
+    @staticmethod
+    def _parse_message_results(result: str) -> list[dict[str, Any]]:
+        """Parse pipe-delimited message results into list of dicts."""
+        messages = []
+        if result:
+            for line in result.split("\n"):
+                if not line:
+                    continue
+                parts = line.split("|")
+                if len(parts) >= 5:
+                    messages.append({
+                        "id": parts[0],
+                        "subject": parts[1],
+                        "sender": parts[2],
+                        "date_received": parts[3],
+                        "read_status": parts[4].lower() == "true",
+                    })
+        return messages
+
+    @staticmethod
+    def _filter_messages(
+        messages: list[dict[str, Any]],
+        sender_contains: str | None,
+        subject_contains: str | None,
+        read_status: bool | None,
+        limit: int | None,
+    ) -> list[dict[str, Any]]:
+        """Apply Python-side filtering to message list."""
+        filtered = []
+        for msg in messages:
+            if sender_contains and sender_contains.lower() not in msg["sender"].lower():
+                continue
+            if subject_contains and subject_contains.lower() not in msg["subject"].lower():
+                continue
+            if read_status is not None and msg["read_status"] != read_status:
+                continue
+            filtered.append(msg)
+            if limit and len(filtered) >= limit:
+                break
+        return filtered
+
+    @staticmethod
+    def _is_whose_error(error_msg: str) -> bool:
+        """Check if an AppleScript error is a whose-clause incompatibility."""
+        msg = str(error_msg)
+        if "Illegal comparison or logical" in msg:
+            return True
+        if "Can't get items" in msg and "whose" in msg:
+            return True
+        return False
+
     def search_messages(
         self,
         account: str,
@@ -169,9 +266,14 @@ class AppleMailConnector:
         subject_contains: str | None = None,
         read_status: bool | None = None,
         limit: int | None = None,
+        scan_limit: int = 200,
     ) -> list[dict[str, Any]]:
         """
         Search for messages matching criteria.
+
+        Uses efficient whose-based AppleScript query for IMAP/iCloud accounts.
+        Automatically falls back to index-based fetch with Python filtering for
+        Exchange accounts where whose clauses are unsupported.
 
         Args:
             account: Account name
@@ -180,6 +282,7 @@ class AppleMailConnector:
             subject_contains: Filter by subject
             read_status: Filter by read status (True=read, False=unread)
             limit: Maximum results
+            scan_limit: Max messages to scan in fallback mode
 
         Returns:
             List of message dictionaries
@@ -188,6 +291,16 @@ class AppleMailConnector:
             MailAccountNotFoundError: If account doesn't exist
             MailMailboxNotFoundError: If mailbox doesn't exist
         """
+        # If account is known to not support whose, skip straight to direct fetch
+        if account in self._whose_unsupported_accounts:
+            logger.debug(f"Account '{account}' cached as whose-unsupported, using direct fetch")
+            result = self._search_messages_direct(account, mailbox, scan_limit)
+            messages = self._parse_message_results(result)
+            return self._filter_messages(
+                messages, sender_contains, subject_contains, read_status, limit
+            )
+
+        # Try whose-based approach first
         account_safe = escape_applescript_string(sanitize_input(account))
         mailbox_safe = escape_applescript_string(sanitize_input(mailbox))
 
@@ -235,25 +348,23 @@ class AppleMailConnector:
         end tell
         """
 
-        result = self._run_applescript(script)
+        try:
+            result = self._run_applescript(script)
+        except MailAppleScriptError as e:
+            if self._is_whose_error(str(e)):
+                logger.info(
+                    f"Account '{account}' does not support whose clause, "
+                    "falling back to direct fetch"
+                )
+                self._whose_unsupported_accounts.add(account)
+                result = self._search_messages_direct(account, mailbox, scan_limit)
+                messages = self._parse_message_results(result)
+                return self._filter_messages(
+                    messages, sender_contains, subject_contains, read_status, limit
+                )
+            raise
 
-        # Parse results
-        messages = []
-        if result:
-            for line in result.split("\n"):
-                if not line:
-                    continue
-                parts = line.split("|")
-                if len(parts) >= 5:
-                    messages.append({
-                        "id": parts[0],
-                        "subject": parts[1],
-                        "sender": parts[2],
-                        "date_received": parts[3],
-                        "read_status": parts[4].lower() == "true",
-                    })
-
-        return messages
+        return self._parse_message_results(result)
 
     def get_message(self, message_id: str, include_content: bool = True) -> dict[str, Any]:
         """
