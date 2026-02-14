@@ -121,6 +121,17 @@ class TestReplyToMessage:
 
         assert result == "67890"
 
+    def test_reply_rejects_invalid_message_id(
+        self, connector: AppleMailConnector
+    ) -> None:
+        """Test validation rejects non-numeric message IDs."""
+        with pytest.raises(ValueError, match="Invalid message ID"):
+            connector.reply_to_message(
+                message_id="abc",
+                body="This should fail",
+                reply_all=False,
+            )
+
 
 class TestForwardMessage:
     """Tests for forwarding messages."""
@@ -250,6 +261,17 @@ class TestForwardMessage:
             connector.forward_message(
                 message_id="12345",
                 to=["invalid-email"],
+                body="This should fail",
+            )
+
+    def test_forward_rejects_invalid_message_id(
+        self, connector: AppleMailConnector
+    ) -> None:
+        """Test validation rejects non-numeric message IDs."""
+        with pytest.raises(ValueError, match="Invalid message ID"):
+            connector.forward_message(
+                message_id="abc",
+                to=["safe@example.com"],
                 body="This should fail",
             )
 

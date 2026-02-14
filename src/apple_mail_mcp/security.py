@@ -6,7 +6,6 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from .exceptions import MailOperationCancelledError
 from .utils import validate_email
 
 logger = logging.getLogger(__name__)
@@ -55,13 +54,18 @@ class OperationLogger:
 operation_logger = OperationLogger()
 
 
-def require_confirmation(operation: str, details: dict[str, Any]) -> bool:
+def require_confirmation(
+    operation: str,
+    details: dict[str, Any],
+    confirmed: bool = False,
+) -> bool:
     """
     Request user confirmation for sensitive operations.
 
     Args:
         operation: Operation name
         details: Operation details to show user
+        confirmed: Whether the caller provided explicit confirmation
 
     Returns:
         True if confirmed, False otherwise
@@ -78,19 +82,13 @@ def require_confirmation(operation: str, details: dict[str, Any]) -> bool:
     # by including operation details in the response and requiring
     # explicit user action.
     #
-    # For now, we'll log the request and return True for testing.
-    # Production should implement proper confirmation flow.
+    if confirmed:
+        logger.info(f"Confirmation acknowledged for: {operation}")
+        return True
 
     logger.warning(f"Confirmation requested for: {operation}")
     logger.warning(f"Details: {details}")
-
-    # TODO: Implement proper confirmation mechanism
-    # This could be:
-    # - Return special MCP response that requires user confirmation
-    # - Show system dialog (osascript -e 'display dialog ...')
-    # - Use callback mechanism
-
-    return True
+    return False
 
 
 def validate_send_operation(

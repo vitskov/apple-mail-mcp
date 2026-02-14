@@ -249,12 +249,29 @@ class AppleMailConnector:
         return filtered
 
     @staticmethod
+    def _validate_message_id(message_id: str) -> str:
+        """Validate message ID and return a safe numeric literal string."""
+        message_id_safe = sanitize_input(message_id).strip()
+        if not message_id_safe or not message_id_safe.isdigit():
+            raise ValueError(f"Invalid message ID: {message_id}")
+        return message_id_safe
+
+    def _format_message_id_list(self, message_ids: list[str]) -> str:
+        """Format a validated list of message IDs for AppleScript list literals."""
+        return ", ".join(self._validate_message_id(message_id) for message_id in message_ids)
+
+    @staticmethod
     def _is_whose_error(error_msg: str) -> bool:
         """Check if an AppleScript error is a whose-clause incompatibility."""
         msg = str(error_msg)
-        if "Illegal comparison or logical" in msg:
+        normalized = msg.replace("Can’t", "Can't").replace("can’t", "can't")
+        lowered = normalized.lower()
+
+        if "illegal comparison or logical" in lowered:
             return True
-        if "Can't get items" in msg and "whose" in msg:
+        if "can't get items" in lowered and "whose" in lowered:
+            return True
+        if "whose" in lowered and "(-1728)" in lowered:
             return True
         return False
 
@@ -318,14 +335,26 @@ class AppleMailConnector:
             status = "true" if read_status else "false"
             conditions.append(f"read status is {status}")
 
-        whose_clause = " and ".join(conditions) if conditions else "true"
-        limit_clause = f"items 1 thru {limit} of" if limit else ""
+        if conditions:
+            message_expression = f'(messages of mailboxRef whose {" and ".join(conditions)})'
+        else:
+            message_expression = "messages of mailboxRef"
+
+        limit_block = ""
+        if limit:
+            limit_block = f"""
+            set msgCount to count of matchedMessages
+            if msgCount > {limit} then
+                set matchedMessages to items 1 thru {limit} of matchedMessages
+            end if
+            """
 
         script = f"""
         tell application "Mail"
             set accountRef to account "{account_safe}"
             set mailboxRef to mailbox "{mailbox_safe}" of accountRef
-            set matchedMessages to {limit_clause} (messages of mailboxRef whose {whose_clause})
+            set matchedMessages to {message_expression}
+            {limit_block}
 
             set resultList to {{}}
             repeat with msg in matchedMessages
@@ -380,7 +409,7 @@ class AppleMailConnector:
         Raises:
             MailMessageNotFoundError: If message doesn't exist
         """
-        message_id_safe = escape_applescript_string(sanitize_input(message_id))
+        message_id_safe = self._validate_message_id(message_id)
 
         # Note: Direct message ID lookup is tricky in AppleScript
         # We need to search through mailboxes
@@ -512,7 +541,7 @@ class AppleMailConnector:
         status = "true" if read else "false"
 
         # Build list of IDs
-        id_list = ", ".join(message_ids)
+        id_list = self._format_message_id_list(message_ids)
 
         script = f"""
         tell application "Mail"
@@ -652,7 +681,7 @@ class AppleMailConnector:
         Raises:
             MailMessageNotFoundError: If message doesn't exist
         """
-        message_id_safe = escape_applescript_string(sanitize_input(message_id))
+        message_id_safe = self._validate_message_id(message_id)
 
         script = f"""
         tell application "Mail"
@@ -745,7 +774,7 @@ class AppleMailConnector:
         except (RuntimeError, OSError) as e:
             raise ValueError(f"Invalid save directory: {e}")
 
-        message_id_safe = escape_applescript_string(sanitize_input(message_id))
+        message_id_safe = self._validate_message_id(message_id)
         dir_safe = escape_applescript_string(str(save_directory))
 
         # Build index filter if specified
@@ -816,7 +845,7 @@ class AppleMailConnector:
 
         account_safe = escape_applescript_string(sanitize_input(account))
         mailbox_safe = escape_applescript_string(sanitize_input(destination_mailbox))
-        id_list = ", ".join(message_ids)
+        id_list = self._format_message_id_list(message_ids)
 
         if gmail_mode:
             # Gmail requires copy + delete approach to properly handle labels
@@ -899,7 +928,7 @@ class AppleMailConnector:
 
         flag_index = get_flag_index(flag_color)
         flagged_status = "true" if flag_color != "none" else "false"
-        id_list = ", ".join(message_ids)
+        id_list = self._format_message_id_list(message_ids)
 
         script = f"""
         tell application "Mail"
@@ -1010,7 +1039,7 @@ class AppleMailConnector:
                 "Maximum is 100 without skip_bulk_check=True"
             )
 
-        id_list = ", ".join(message_ids)
+        id_list = self._format_message_id_list(message_ids)
 
         if permanent:
             # Permanent delete (not recommended, requires extra caution)
@@ -1082,21 +1111,18 @@ class AppleMailConnector:
         Raises:
             MailMessageNotFoundError: If message doesn't exist
         """
-        from .utils import sanitize_input
-
         body_safe = escape_applescript_string(sanitize_input(body))
+        message_id_safe = self._validate_message_id(message_id)
         reply_type = "reply to all" if reply_all else "reply"
 
         # Apple Mail's reply command automatically handles quoting if opened in editor
         # We'll create a reply and set its content
         script = f"""
         tell application "Mail"
-            set idList to {{"{message_id}"}}
-
             repeat with acc in accounts
                 repeat with mb in mailboxes of acc
                     try
-                        set origMsg to first message of mb whose id is "{message_id}"
+                        set origMsg to first message of mb whose id is {message_id_safe}
 
                         -- Create reply message
                         set replyMsg to {reply_type} origMsg
@@ -1170,6 +1196,7 @@ class AppleMailConnector:
                     raise ValueError(f"Invalid BCC email address: {email}")
 
         body_safe = escape_applescript_string(sanitize_input(body))
+        message_id_safe = self._validate_message_id(message_id)
         to_list = format_applescript_list(to)
         cc_list = format_applescript_list(cc) if cc else '""'
         bcc_list = format_applescript_list(bcc) if bcc else '""'
@@ -1179,7 +1206,7 @@ class AppleMailConnector:
             repeat with acc in accounts
                 repeat with mb in mailboxes of acc
                     try
-                        set origMsg to first message of mb whose id is "{message_id}"
+                        set origMsg to first message of mb whose id is {message_id_safe}
 
                         -- Create forward message
                         set fwdMsg to forward origMsg

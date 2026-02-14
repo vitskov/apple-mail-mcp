@@ -102,6 +102,8 @@ class TestAppleMailConnector:
         assert result[0]["subject"] == "Test Subject"
         assert result[0]["sender"] == "sender@example.com"
         assert result[0]["read_status"] is False
+        call_args = mock_run.call_args[0][0]
+        assert "whose true" not in call_args
 
     @patch.object(AppleMailConnector, "_run_applescript")
     def test_search_messages_with_filters(
@@ -210,6 +212,13 @@ class TestAppleMailConnector:
         result = connector.mark_as_read([])
         assert result == 0
 
+    def test_mark_as_read_rejects_invalid_message_id(
+        self, connector: AppleMailConnector
+    ) -> None:
+        """Test validation rejects non-numeric message IDs."""
+        with pytest.raises(ValueError, match="Invalid message ID"):
+            connector.mark_as_read(["12345", "abc"])
+
 
 class TestSearchMessagesExchangeFallback:
     """Tests for Exchange account fallback in search_messages."""
@@ -260,6 +269,29 @@ class TestSearchMessagesExchangeFallback:
         ]
 
         result = connector.search_messages("ExchangeAccount", "INBOX")
+
+        assert len(result) == 1
+        assert "ExchangeAccount" in connector._whose_unsupported_accounts
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_exchange_fallback_unicode_apostrophe(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """Verify fallback triggers on unicode-apostrophe whose errors."""
+        mock_run.side_effect = [
+            MailAppleScriptError(
+                "Can’t get items 1 thru 50 of every message of mailbox "
+                '"Inbox" whose read status = false. (-1728)'
+            ),
+            "101|Subject|sender@exchange.com|Mon Jan 1 2024|false",
+        ]
+
+        result = connector.search_messages(
+            "ExchangeAccount",
+            "Inbox",
+            read_status=False,
+            limit=50,
+        )
 
         assert len(result) == 1
         assert "ExchangeAccount" in connector._whose_unsupported_accounts
@@ -333,7 +365,7 @@ class TestSearchMessagesExchangeFallback:
     def test_search_messages_imap_no_fallback(
         self, mock_run: MagicMock, connector: AppleMailConnector
     ) -> None:
-        """Verify IMAP accounts still use whose path without fallback."""
+        """Verify no-filter IMAP query avoids `whose true` and no fallback is used."""
         mock_run.return_value = "12345|Test Subject|sender@gmail.com|Mon Jan 1 2024|false"
 
         result = connector.search_messages("Gmail", "INBOX")
@@ -341,8 +373,9 @@ class TestSearchMessagesExchangeFallback:
         assert len(result) == 1
         # Only one call — whose-based succeeded
         assert mock_run.call_count == 1
-        # Verify it used the whose-based script
+        # Verify no-filter query path is used (hardened against `whose true`)
         call_args = mock_run.call_args[0][0]
-        assert "whose" in call_args
+        assert "messages of mailboxRef" in call_args
+        assert "whose" not in call_args
         # Gmail should NOT be in the unsupported set
         assert "Gmail" not in connector._whose_unsupported_accounts

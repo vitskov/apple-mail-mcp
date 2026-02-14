@@ -218,6 +218,7 @@ def send_email(
     to: list[str],
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    confirmed: bool = False,
 ) -> dict[str, Any]:
     """
     Send an email via Apple Mail.
@@ -230,6 +231,7 @@ def send_email(
         to: List of recipient email addresses
         cc: List of CC recipients (optional)
         bcc: List of BCC recipients (optional)
+        confirmed: Explicit confirmation to proceed with send (default: false)
 
     Returns:
         Dictionary indicating success or failure
@@ -266,18 +268,23 @@ def send_email(
         logger.info(f"Requesting confirmation to send email: {subject}")
         logger.info(f"Recipients: {to}, CC: {cc}, BCC: {bcc}")
 
-        # In production, this should actually block and wait for user confirmation
-        # For now, we'll proceed but log the confirmation requirement
-        if not require_confirmation("send_email", confirmation_details):
+        if not require_confirmation(
+            "send_email",
+            confirmation_details,
+            confirmed=confirmed,
+        ):
             operation_logger.log_operation(
                 "send_email",
                 confirmation_details,
-                "cancelled"
+                "confirmation_required"
             )
             return {
                 "success": False,
-                "error": "User cancelled operation",
-                "error_type": "cancelled",
+                "error": "Confirmation required before sending email",
+                "error_type": "confirmation_required",
+                "confirmation_required": True,
+                "operation": "send_email",
+                "details": confirmation_details,
             }
 
         # Send the email
@@ -288,6 +295,18 @@ def send_email(
             cc=cc,
             bcc=bcc,
         )
+
+        if not result:
+            operation_logger.log_operation(
+                "send_email",
+                {"subject": subject, "to": to, "cc": cc, "bcc": bcc},
+                "failure",
+            )
+            return {
+                "success": False,
+                "error": "Apple Mail did not confirm email delivery",
+                "error_type": "send_error",
+            }
 
         operation_logger.log_operation(
             "send_email",
@@ -385,6 +404,7 @@ def send_email_with_attachments(
     attachments: list[str],
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    confirmed: bool = False,
 ) -> dict[str, Any]:
     """
     Send an email with file attachments via Apple Mail.
@@ -398,6 +418,7 @@ def send_email_with_attachments(
         attachments: List of file paths to attach
         cc: List of CC recipients (optional)
         bcc: List of BCC recipients (optional)
+        confirmed: Explicit confirmation to proceed with send (default: false)
 
     Returns:
         Dictionary indicating success or failure
@@ -449,16 +470,23 @@ def send_email_with_attachments(
         logger.info(f"Requesting confirmation to send email with attachments: {subject}")
         logger.info(f"Recipients: {to}, Attachments: {len(attachments)}")
 
-        if not require_confirmation("send_email_with_attachments", confirmation_details):
+        if not require_confirmation(
+            "send_email_with_attachments",
+            confirmation_details,
+            confirmed=confirmed,
+        ):
             operation_logger.log_operation(
                 "send_email_with_attachments",
                 confirmation_details,
-                "cancelled"
+                "confirmation_required"
             )
             return {
                 "success": False,
-                "error": "User cancelled operation",
-                "error_type": "cancelled",
+                "error": "Confirmation required before sending email",
+                "error_type": "confirmation_required",
+                "confirmation_required": True,
+                "operation": "send_email_with_attachments",
+                "details": confirmation_details,
             }
 
         # Send the email
@@ -470,6 +498,18 @@ def send_email_with_attachments(
             cc=cc,
             bcc=bcc,
         )
+
+        if not result:
+            operation_logger.log_operation(
+                "send_email_with_attachments",
+                {"subject": subject, "to": to, "attachments": len(attachments)},
+                "failure",
+            )
+            return {
+                "success": False,
+                "error": "Apple Mail did not confirm email delivery",
+                "error_type": "send_error",
+            }
 
         operation_logger.log_operation(
             "send_email_with_attachments",
